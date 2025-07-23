@@ -1,0 +1,34 @@
+# =============================================================================
+# APM Server configuration (bind-mounted read-only).
+# ${VAR} values come from the container environment (set in compose.apm.yaml).
+# =============================================================================
+
+apm-server:
+  host: "0.0.0.0:8200"
+  # Applications must present this token (Authorization: Bearer <token>).
+  # Leave empty to disable auth (not recommended).
+  auth:
+    secret_token: "${APM_SECRET_TOKEN}"
+
+# Register the APM index templates / dashboards in Kibana.
+setup.kibana:
+  host: "http://kibana:5601"
+  username: "elastic"
+  password: "${ELASTIC_PASSWORD}"
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  username: "elastic"
+  password: "${ELASTIC_PASSWORD}"
+
+# Send APM Server's own metrics/logs to the monitoring cluster.
+monitoring:
+  enabled: true
+  elasticsearch:
+    hosts: ["http://elasticsearch:9200"]
+    username: "elastic"
+    password: "${ELASTIC_PASSWORD}"
+
+logging:
+  level: info
+  to_stderr: true

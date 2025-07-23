@@ -1,0 +1,43 @@
+# =============================================================================
+# Auditbeat configuration (legacy fallback).
+# =============================================================================
+
+auditbeat.modules:
+  # File Integrity Monitoring — safe everywhere, no host conflict.
+  - module: file_integrity
+    paths:
+      - /hostfs/etc
+      - /bin
+      - /usr/bin
+      - /sbin
+      - /usr/sbin
+
+  # Kernel audit framework. Comment this whole block out if the host already
+  # runs auditd (only one owner of the audit socket is allowed).
+  - module: auditd
+    audit_rules: |
+      ## Executions
+      -a always,exit -F arch=b64 -S execve,execveat -k exec
+      ## Identity / privilege changes
+      -w /etc/passwd -p wa -k identity
+      -w /etc/group  -p wa -k identity
+      -w /etc/sudoers -p wa -k identity
+
+processors:
+  - add_host_metadata: ~
+
+setup.kibana:
+  host: "http://kibana:5601"
+  username: "elastic"
+  password: "${ELASTIC_PASSWORD}"
+
+setup.ilm.enabled: true
+setup.template.settings:
+  index.number_of_replicas: 0
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  username: "elastic"
+  password: "${ELASTIC_PASSWORD}"
+
+logging.level: info

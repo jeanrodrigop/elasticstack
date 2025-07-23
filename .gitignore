@@ -1,0 +1,9 @@
+.env
+
+.claude/
+
+volumes/*/*
+!volumes/*/.gitkeep
+
+*.swp
+.DS_Store

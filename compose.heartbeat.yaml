@@ -1,0 +1,63 @@
+# =============================================================================
+# LEGACY MODULE: Heartbeat  (prefer Elastic Agent + the Synthetics integration)
+#
+#   docker compose -f compose.yaml -f compose.heartbeat.yaml up -d
+#
+# Active uptime monitoring: pings HTTP/TCP/ICMP endpoints and records latency
+# and availability in the core Elasticsearch.
+# =============================================================================
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-labels: &default-labels
+  com.elastic-stack.project: "elastic-stack"
+  com.elastic-stack.managed-by: "docker-compose"
+
+services:
+
+  heartbeat:
+    image: docker.elastic.co/beats/heartbeat:${STACK_VERSION:-9.4.2}
+    container_name: heartbeat
+    labels:
+      <<: *default-labels
+      com.elastic-stack.component: "heartbeat"
+    restart: unless-stopped
+    networks: [elastic]
+    user: root
+    # NET_RAW is needed only for ICMP (ping) monitors.
+    cap_add: ["NET_RAW"]
+    command: ["--strict.perms=false"]
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - TZ=${TIMEZONE:-UTC}
+    volumes:
+      - ${HEARTBEAT_CONFIG:-./configs/heartbeat/heartbeat.yml}:/usr/share/heartbeat/heartbeat.yml:ro
+      - heartbeat-data:/usr/share/heartbeat/data
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "heartbeat test output | grep -q -i 'talk to server.*OK' || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 6
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+    logging: *default-logging
+
+volumes:
+  heartbeat-data:
+    name: elastic-stack-heartbeat-data
+
+networks:
+  elastic:
+    name: elastic-stack
+    driver: bridge

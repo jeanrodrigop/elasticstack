@@ -1,0 +1,71 @@
+# =============================================================================
+# MODULE: Elastic APM Server
+#
+#   docker compose -f compose.yaml -f compose.apm.yaml up -d
+#
+# Standalone APM Server for application performance monitoring / tracing.
+# Apps send traces to http://<host>:8200 using APM_SECRET_TOKEN.
+#
+# NOTE: With Fleet you can instead add the "APM" integration to an agent policy
+# (compose.agent.yaml). This standalone server is the lightweight, classic path.
+# =============================================================================
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-labels: &default-labels
+  com.elastic-stack.project: "elastic-stack"
+  com.elastic-stack.managed-by: "docker-compose"
+
+services:
+
+  apm-server:
+    image: docker.elastic.co/apm/apm-server:${STACK_VERSION:-9.4.2}
+    container_name: apm-server
+    labels:
+      <<: *default-labels
+      com.elastic-stack.component: "apm-server"
+    restart: unless-stopped
+    networks: [elastic]
+    ports:
+      - "${APM_PORT:-8200}:8200"
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - APM_SECRET_TOKEN=${APM_SECRET_TOKEN}
+      - TZ=${TIMEZONE:-UTC}
+    volumes:
+      - ./configs/apm/apm-server.yml:/usr/share/apm-server/apm-server.yml:ro
+    # NOTE: the image's entrypoint is already the `apm-server` binary, so the
+    # command must be flags ONLY — repeating `apm-server` here makes it parse the
+    # word as a subcommand ("unknown command apm-server"). --strict.perms=false
+    # avoids a config-ownership error on the bind-mounted apm-server.yml.
+    command: >-
+      --strict.perms=false -e
+      -E apm-server.host=0.0.0.0:8200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      kibana:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "apm-server test output | grep -q -i 'OK' || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 45s
+    deploy:
+      resources:
+        limits:
+          cpus: "${APM_CPU_LIMIT:-1}"
+          memory: ${APM_MEM_LIMIT:-1g}
+        reservations:
+          memory: 256m
+    logging: *default-logging
+
+networks:
+  elastic:
+    name: elastic-stack
+    driver: bridge

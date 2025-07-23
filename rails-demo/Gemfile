@@ -1,0 +1,15 @@
+source "https://rubygems.org"
+
+# Rails (API-only is configured in config/application.rb).
+gem "rails", "~> 7.1.5"
+
+# PostgreSQL driver — the dependency we want to show up in APM.
+gem "pg", "~> 1.5"
+
+# App server.
+gem "puma", "~> 6.4"
+
+# Elastic APM agent: traces, errors, metrics, and — crucially — ActiveRecord
+# (pg) spans, which is what makes PostgreSQL appear as a Dependency in Kibana.
+# `require: "elastic_apm"` so Bundler.require loads the right file.
+gem "elastic-apm", "~> 4.0", require: "elastic_apm"

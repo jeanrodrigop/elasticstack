@@ -1,0 +1,61 @@
+# =============================================================================
+# Metricbeat configuration (legacy fallback).
+# System metrics from the host (via /hostfs) + Docker metrics from the daemon.
+# =============================================================================
+
+metricbeat.modules:
+  # ----- Host metrics -----
+  - module: system
+    period: 10s
+    metricsets:
+      - cpu
+      - load
+      - memory
+      - network
+      - process
+      - process_summary
+      - socket_summary
+      - filesystem
+      - fsstat
+    processes: ['.*']
+    process.include_top_n:
+      by_cpu: 5
+      by_memory: 5
+
+  - module: system
+    period: 1m
+    metricsets:
+      - uptime
+
+  # ----- Docker metrics -----
+  - module: docker
+    period: 10s
+    hosts: ["unix:///var/run/docker.sock"]
+    metricsets:
+      - container
+      - cpu
+      - diskio
+      - healthcheck
+      - info
+      - memory
+      - network
+
+processors:
+  - add_docker_metadata: ~
+  - add_host_metadata: ~
+
+setup.kibana:
+  host: "http://kibana:5601"
+  username: "elastic"
+  password: "${ELASTIC_PASSWORD}"
+
+setup.ilm.enabled: true
+setup.template.settings:
+  index.number_of_replicas: 0
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  username: "elastic"
+  password: "${ELASTIC_PASSWORD}"
+
+logging.level: info

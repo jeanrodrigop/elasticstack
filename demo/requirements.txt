@@ -1,0 +1,13 @@
+# Web framework for the demo "shop" endpoints.
+Flask>=3.0,<4.0
+
+# Elastic APM Python agent — ships traces, errors and metrics to APM Server
+# and injects trace IDs into log records (via elasticapm.handlers.logging).
+elastic-apm>=6.22.0,<7.0
+
+# ECS JSON log formatter; understands the elasticapm_* record attributes and
+# maps them to ECS trace.id / transaction.id / span.id for log↔trace correlation.
+ecs-logging>=2.1.0,<3.0
+
+# Used by the in-process load generator to drive traffic against the endpoints.
+requests>=2.31.0,<3.0

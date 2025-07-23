@@ -1,0 +1,17 @@
+# Connection is driven entirely by environment variables (set in
+# compose.railsdemo.yaml) so the same image works in any environment.
+default: &default
+  adapter: postgresql
+  encoding: unicode
+  host: <%= ENV.fetch("POSTGRES_HOST", "rails-postgres") %>
+  port: <%= ENV.fetch("POSTGRES_PORT", 5432) %>
+  database: <%= ENV.fetch("POSTGRES_DB", "railsdemo") %>
+  username: <%= ENV.fetch("POSTGRES_USER", "rails") %>
+  password: <%= ENV.fetch("POSTGRES_PASSWORD", "railspass") %>
+  pool: <%= ENV.fetch("RAILS_MAX_THREADS", 5) %>
+
+production:
+  <<: *default
+
+development:
+  <<: *default

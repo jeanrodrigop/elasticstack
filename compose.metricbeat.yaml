@@ -1,0 +1,68 @@
+# =============================================================================
+# LEGACY MODULE: Metricbeat  (prefer compose.agent.yaml / Elastic Agent)
+#
+#   docker compose -f compose.yaml -f compose.metricbeat.yaml up -d
+#
+# Collects host (System) and Docker metrics and ships them to the core
+# Elasticsearch. Fallback for Beats-standardised environments.
+# =============================================================================
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-labels: &default-labels
+  com.elastic-stack.project: "elastic-stack"
+  com.elastic-stack.managed-by: "docker-compose"
+
+services:
+
+  metricbeat:
+    image: docker.elastic.co/beats/metricbeat:${STACK_VERSION:-9.4.2}
+    container_name: metricbeat
+    labels:
+      <<: *default-labels
+      com.elastic-stack.component: "metricbeat"
+    restart: unless-stopped
+    networks: [elastic]
+    user: root
+    # pid/cgroup host namespaces + hostfs give the System module real host data.
+    pid: host
+    cap_add: ["SYS_PTRACE", "DAC_READ_SEARCH"]
+    command: ["--strict.perms=false", "--system.hostfs=/hostfs"]
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - TZ=${TIMEZONE:-UTC}
+    volumes:
+      - ${METRICBEAT_CONFIG:-./configs/metricbeat/metricbeat.yml}:/usr/share/metricbeat/metricbeat.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc:/hostfs/proc:ro
+      - /sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro
+      - /:/hostfs:ro
+      - metricbeat-data:/usr/share/metricbeat/data
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "metricbeat test output | grep -q -i 'talk to server.*OK' || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 6
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+    logging: *default-logging
+
+volumes:
+  metricbeat-data:
+    name: elastic-stack-metricbeat-data
+
+networks:
+  elastic:
+    name: elastic-stack
+    driver: bridge

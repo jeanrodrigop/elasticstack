@@ -1,0 +1,151 @@
+# =============================================================================
+# MODULE: Ruby on Rails error-simulator demo  (+ PostgreSQL dependency)
+#
+#   docker compose -f compose.yaml -f compose.apm.yaml -f compose.agent.yaml \
+#                  -f compose.railsdemo.yaml up -d --build
+#
+#   # or, with the Makefile (runs alongside the python `demo` module):
+#   make MODULES="apm agent demo railsdemo" up
+#
+# Brings up three services:
+#   * rails-postgres        — PostgreSQL 16, the backing store.
+#   * rails-error-simulator — Rails 7.1 API app that saves "orders" to Postgres
+#                             and fails on purpose. The Elastic APM agent traces
+#                             every request and auto-instruments the pg queries,
+#                             so PostgreSQL shows up under APM -> Dependencies.
+#   * rails-loadgen         — a tiny curl loop that drives traffic continuously.
+#
+# REQUIRES the `apm` module (traces target apm-server). The `agent` (or legacy
+# `filebeat`) module collects the container's ECS-JSON stdout logs.
+# =============================================================================
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-labels: &default-labels
+  com.elastic-stack.project: "elastic-stack"
+  com.elastic-stack.managed-by: "docker-compose"
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # rails-postgres — the database the Rails app depends on.
+  # ---------------------------------------------------------------------------
+  rails-postgres:
+    image: postgres:16
+    container_name: rails-postgres
+    labels:
+      <<: *default-labels
+      com.elastic-stack.component: "rails-postgres"
+    restart: unless-stopped
+    networks: [elastic]
+    environment:
+      - POSTGRES_USER=${RAILS_PG_USER:-rails}
+      - POSTGRES_PASSWORD=${RAILS_PG_PASSWORD:-railspass}
+      - POSTGRES_DB=${RAILS_PG_DB:-railsdemo}
+      - TZ=${TIMEZONE:-UTC}
+    volumes:
+      - rails-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${RAILS_PG_USER:-rails} -d ${RAILS_PG_DB:-railsdemo}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # rails-error-simulator — the instrumented Rails app.
+  # ---------------------------------------------------------------------------
+  rails-error-simulator:
+    build: ./rails-demo
+    image: elastic-stack/rails-error-simulator:latest
+    container_name: rails-error-simulator
+    labels:
+      <<: *default-labels
+      com.elastic-stack.component: "rails-error-simulator"
+      # Parse the ECS-JSON stdout into real fields (so trace.id correlates).
+      # See demo/README.md for enabling this on the Elastic Agent Docker integration.
+      co.elastic.logs/json.keys_under_root: "true"
+      co.elastic.logs/json.add_error_key: "true"
+      co.elastic.logs/json.overwrite_keys: "true"
+      co.elastic.logs/json.expand_keys: "true"
+      co.elastic.logs/json.message_key: "message"
+    restart: unless-stopped
+    networks: [elastic]
+    ports:
+      - "${RAILS_DEMO_PORT:-3000}:3000"
+    environment:
+      # --- Rails --------------------------------------------------------------
+      - RAILS_ENV=production
+      - SECRET_KEY_BASE=${RAILS_SECRET_KEY_BASE:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      - RAILS_MAX_THREADS=5
+      # --- Database -----------------------------------------------------------
+      - POSTGRES_HOST=rails-postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${RAILS_PG_DB:-railsdemo}
+      - POSTGRES_USER=${RAILS_PG_USER:-rails}
+      - POSTGRES_PASSWORD=${RAILS_PG_PASSWORD:-railspass}
+      # --- Elastic APM agent --------------------------------------------------
+      - ELASTIC_APM_SERVICE_NAME=ruby-rails-error-simulator
+      - ELASTIC_APM_SERVER_URL=http://apm-server:8200
+      - ELASTIC_APM_SECRET_TOKEN=${APM_SECRET_TOKEN:-changeme_apm_token}
+      - ELASTIC_APM_ENVIRONMENT=demo
+      # --- App behaviour ------------------------------------------------------
+      - ERROR_RATE=0.25
+      - TZ=${TIMEZONE:-UTC}
+    depends_on:
+      rails-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 512m
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # rails-loadgen — drives continuous traffic so data flows with no manual curl.
+  # ---------------------------------------------------------------------------
+  rails-loadgen:
+    image: curlimages/curl:latest
+    container_name: rails-loadgen
+    labels:
+      <<: *default-labels
+      com.elastic-stack.component: "rails-loadgen"
+    restart: unless-stopped
+    networks: [elastic]
+    depends_on:
+      rails-error-simulator:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "driving traffic at rails-error-simulator:3000";
+        while true; do
+          for p in /orders /orders/random /checkout /orders/7 /orders/21 /boom; do
+            curl -s -o /dev/null -w "%{http_code} $$p\n" "http://rails-error-simulator:3000$$p" || true;
+            sleep 1;
+          done;
+        done
+    logging: *default-logging
+
+# --- Persistence -------------------------------------------------------------
+volumes:
+  rails-postgres-data:
+    name: elastic-stack-rails-postgres-data
+
+# --- Network -----------------------------------------------------------------
+networks:
+  elastic:
+    name: elastic-stack
+    driver: bridge

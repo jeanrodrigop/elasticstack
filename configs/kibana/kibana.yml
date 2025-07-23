@@ -1,0 +1,92 @@
+# =============================================================================
+# Kibana configuration
+#
+# ${VAR} placeholders are substituted at runtime from the container environment
+# (injected by compose.yaml from your .env). This file is bind-mounted read-only.
+# =============================================================================
+
+server.name: kibana
+server.host: "0.0.0.0"
+server.port: 5601
+# Public URL used to build links (enrollment commands, reports, etc.).
+server.publicBaseUrl: "http://localhost:${KIBANA_PORT}"
+
+# --- Connection to Elasticsearch (least-privilege service user) --------------
+elasticsearch.hosts: ["http://elasticsearch:9200"]
+elasticsearch.username: "kibana_system"
+elasticsearch.password: "${KIBANA_PASSWORD}"
+
+# --- Encryption keys ---------------------------------------------------------
+# All three must be >= 32 chars and remain STABLE across restarts, otherwise
+# Fleet enrollment, alerting and reporting saved objects become unreadable.
+xpack.security.encryptionKey: "${KIBANA_ENCRYPTION_KEY}"
+xpack.encryptedSavedObjects.encryptionKey: "${KIBANA_ENCRYPTION_KEY}"
+xpack.reporting.encryptionKey: "${KIBANA_ENCRYPTION_KEY}"
+
+# Quieter, friendlier logs.
+logging.root.level: info
+i18n.locale: "en"
+
+# =============================================================================
+# Fleet pre-configuration
+#
+# Declaring policies here makes the stack Fleet-ready on first boot with zero
+# clicks. compose.agent.yaml's Fleet Server and Elastic Agent simply enrol into
+# the policies defined below.
+# =============================================================================
+
+# Integration packages installed automatically.
+xpack.fleet.packages:
+  - name: fleet_server
+    version: latest
+  - name: elastic_agent
+    version: latest
+  - name: system
+    version: latest
+  - name: docker
+    version: latest
+
+# Where agents send their data (the core Elasticsearch).
+xpack.fleet.outputs:
+  - id: fleet-default-output
+    name: default
+    type: elasticsearch
+    hosts: ["http://elasticsearch:9200"]
+    is_default: true
+    is_default_monitoring: true
+
+# Where agents reach Fleet Server (internal Docker network name).
+xpack.fleet.fleetServerHosts:
+  - id: default-fleet-server
+    name: default
+    is_default: true
+    host_urls: ["http://fleet-server:8220"]
+
+# Agent policies.
+xpack.fleet.agentPolicies:
+  # Policy dedicated to the Fleet Server agent.
+  - name: Fleet Server Policy
+    id: fleet-server-policy
+    namespace: default
+    monitoring_enabled: ["logs", "metrics"]
+    is_default_fleet_server: true
+    package_policies:
+      - name: fleet_server-1
+        package:
+          name: fleet_server
+
+  # Default policy for data-collection agents. Ships host + Docker
+  # observability out of the box. Extend it from Fleet UI (or here) to add
+  # Kubernetes, Nginx, PostgreSQL, etc. — see README.md.
+  - name: Elastic Agent Observability
+    id: agent-policy-observability
+    namespace: default
+    monitoring_enabled: ["logs", "metrics"]
+    is_default: true
+    package_policies:
+      - name: system-1
+        package:
+          name: system
+      - name: docker-1
+        package:
+          name: docker

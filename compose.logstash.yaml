@@ -1,0 +1,69 @@
+# =============================================================================
+# MODULE: Logstash
+#
+#   docker compose -f compose.yaml -f compose.logstash.yaml up -d
+#
+# Ingestion/transformation pipeline that sits in front of Elasticsearch.
+# Accepts Beats (5044) and raw TCP/JSON (5000) input. Pipeline and settings are
+# bind-mounted from ./configs/logstash so you can iterate without rebuilding.
+# =============================================================================
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-labels: &default-labels
+  com.elastic-stack.project: "elastic-stack"
+  com.elastic-stack.managed-by: "docker-compose"
+
+services:
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:${STACK_VERSION:-9.4.2}
+    container_name: logstash
+    labels:
+      <<: *default-labels
+      com.elastic-stack.component: "logstash"
+    restart: unless-stopped
+    networks: [elastic]
+    ports:
+      - "${LOGSTASH_BEATS_PORT:-5044}:5044"   # Beats / Elastic Agent input
+      - "${LOGSTASH_TCP_PORT:-5000}:5000"     # raw TCP (JSON lines) input
+      - "${LOGSTASH_API_PORT:-9600}:9600"     # monitoring API
+    environment:
+      - LS_JAVA_OPTS=-Xms${LS_JAVA_HEAP:-512m} -Xmx${LS_JAVA_HEAP:-512m}
+      # Credentials used by the pipeline's elasticsearch output (see *.conf).
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - TZ=${TIMEZONE:-UTC}
+    volumes:
+      - ./configs/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./configs/logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - logstash-data:/usr/share/logstash/data
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -f http://localhost:9600/_node/pipelines || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "${LOGSTASH_CPU_LIMIT:-1}"
+          memory: ${LOGSTASH_MEM_LIMIT:-1g}
+        reservations:
+          memory: 512m
+    logging: *default-logging
+
+volumes:
+  logstash-data:
+    name: elastic-stack-logstash-data
+
+networks:
+  elastic:
+    name: elastic-stack
+    driver: bridge

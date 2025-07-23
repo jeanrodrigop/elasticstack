@@ -1,0 +1,69 @@
+# =============================================================================
+# LEGACY MODULE: Auditbeat  (prefer Elastic Agent + the Auditd/FIM integrations)
+#
+#   docker compose -f compose.yaml -f compose.auditbeat.yaml up -d
+#
+# Host auditing: kernel audit events + file-integrity monitoring (FIM).
+#
+# NOTE: the kernel audit netlink socket can only have ONE owner. If the host
+# already runs auditd, keep only the file_integrity module enabled (see config)
+# to avoid a conflict.
+# =============================================================================
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-labels: &default-labels
+  com.elastic-stack.project: "elastic-stack"
+  com.elastic-stack.managed-by: "docker-compose"
+
+services:
+
+  auditbeat:
+    image: docker.elastic.co/beats/auditbeat:${STACK_VERSION:-9.4.2}
+    container_name: auditbeat
+    labels:
+      <<: *default-labels
+      com.elastic-stack.component: "auditbeat"
+    restart: unless-stopped
+    networks: [elastic]
+    user: root
+    # Host PID namespace + audit capabilities are required to read kernel events.
+    pid: host
+    cap_add: ["AUDIT_CONTROL", "AUDIT_READ"]
+    command: ["--strict.perms=false"]
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - TZ=${TIMEZONE:-UTC}
+    volumes:
+      - ${AUDITBEAT_CONFIG:-./configs/auditbeat/auditbeat.yml}:/usr/share/auditbeat/auditbeat.yml:ro
+      - /etc:/hostfs/etc:ro
+      - /var/log:/hostfs/var/log:ro
+      - auditbeat-data:/usr/share/auditbeat/data
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "auditbeat test output | grep -q -i 'talk to server.*OK' || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 6
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+    logging: *default-logging
+
+volumes:
+  auditbeat-data:
+    name: elastic-stack-auditbeat-data
+
+networks:
+  elastic:
+    name: elastic-stack
+    driver: bridge

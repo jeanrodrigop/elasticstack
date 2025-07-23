@@ -1,0 +1,56 @@
+# =============================================================================
+# Heartbeat configuration (legacy fallback).
+# Monitors the stack itself by default — add your own services below.
+# =============================================================================
+
+heartbeat.monitors:
+  # --- HTTP: is Elasticsearch answering? ---
+  - type: http
+    id: elasticsearch-http
+    name: Elasticsearch
+    urls: ["http://elasticsearch:9200"]
+    schedule: '@every 30s'
+    username: "elastic"
+    password: "${ELASTIC_PASSWORD}"
+    check.response.status: [200]
+
+  # --- HTTP: is Kibana up? ---
+  - type: http
+    id: kibana-http
+    name: Kibana
+    urls: ["http://kibana:5601/api/status"]
+    schedule: '@every 30s'
+    check.response.status: [200]
+
+  # --- TCP: example port check ---
+  - type: tcp
+    id: elasticsearch-tcp
+    name: Elasticsearch transport
+    hosts: ["elasticsearch:9200"]
+    schedule: '@every 30s'
+
+  # --- ICMP: example ping (requires NET_RAW, enabled in the compose file) ---
+  # - type: icmp
+  #   id: gateway-ping
+  #   name: Default gateway
+  #   hosts: ["8.8.8.8"]
+  #   schedule: '@every 30s'
+
+processors:
+  - add_host_metadata: ~
+
+setup.kibana:
+  host: "http://kibana:5601"
+  username: "elastic"
+  password: "${ELASTIC_PASSWORD}"
+
+setup.ilm.enabled: true
+setup.template.settings:
+  index.number_of_replicas: 0
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  username: "elastic"
+  password: "${ELASTIC_PASSWORD}"
+
+logging.level: info

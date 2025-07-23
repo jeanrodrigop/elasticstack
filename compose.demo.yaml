@@ -1,0 +1,85 @@
+# =============================================================================
+# MODULE: Python error-simulator demo  (traces + logs + metrics -> Elastic APM)
+#
+#   docker compose -f compose.yaml -f compose.apm.yaml -f compose.agent.yaml \
+#                  -f compose.demo.yaml up -d --build
+#
+#   # or, with the Makefile:
+#   make MODULES="apm agent demo" up
+#
+# A tiny Flask app that randomly errors. It ships traces / errors / metrics to
+# the APM Server (compose.apm.yaml) and prints trace-correlated ECS-JSON logs to
+# stdout for the Elastic Agent (compose.agent.yaml) to collect.
+#
+# REQUIRES the `apm` module (where it sends traces). The `agent` module — or the
+# legacy `filebeat` module — is what picks up its container logs. The container
+# labels below tell those collectors the stdout lines are JSON, so trace.id
+# becomes a real field and log<->trace correlation lights up in Kibana.
+# =============================================================================
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-labels: &default-labels
+  com.elastic-stack.project: "elastic-stack"
+  com.elastic-stack.managed-by: "docker-compose"
+
+services:
+
+  error-simulator:
+    build: ./demo
+    image: elastic-stack/error-simulator:latest
+    container_name: error-simulator
+    labels:
+      <<: *default-labels
+      com.elastic-stack.component: "error-simulator"
+      # Parse the ECS-JSON stdout into real fields (needs hints-based
+      # autodiscovery on the collector — Filebeat has it on by default; for the
+      # Elastic Agent Docker integration see demo/README.md).
+      co.elastic.logs/json.keys_under_root: "true"
+      co.elastic.logs/json.add_error_key: "true"
+      co.elastic.logs/json.overwrite_keys: "true"
+      co.elastic.logs/json.expand_keys: "true"
+      co.elastic.logs/json.message_key: "message"
+    restart: unless-stopped
+    networks: [elastic]
+    ports:
+      - "${DEMO_PORT:-8000}:8000"
+    environment:
+      # --- Elastic APM agent --------------------------------------------------
+      - ELASTIC_APM_SERVICE_NAME=python-error-simulator
+      - ELASTIC_APM_SERVER_URL=http://apm-server:8200
+      # Same token the APM Server uses (both read it from .env), so they always
+      # match. Empty token on the server = auth disabled, which also works.
+      - ELASTIC_APM_SECRET_TOKEN=${APM_SECRET_TOKEN:-changeme_apm_token}
+      - ELASTIC_APM_ENVIRONMENT=demo
+      - ELASTIC_APM_SERVICE_VERSION=1.0.0
+      # --- App behaviour ------------------------------------------------------
+      - ERROR_RATE=0.25        # ~1 in 4 requests fails
+      - LOAD_INTERVAL=1.0      # load generator pace (seconds, roughly)
+      - ENABLE_LOAD_GENERATOR=true
+      - TZ=${TIMEZONE:-UTC}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/',timeout=3).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+    logging: *default-logging
+
+networks:
+  elastic:
+    name: elastic-stack
+    driver: bridge

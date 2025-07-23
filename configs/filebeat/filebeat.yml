@@ -1,0 +1,38 @@
+# =============================================================================
+# Filebeat configuration (legacy fallback).
+# Auto-discovers Docker containers and collects their logs with metadata.
+# =============================================================================
+
+filebeat.autodiscover:
+  providers:
+    - type: docker
+      hints.enabled: true        # honour co.elastic.logs/* container labels
+      templates:
+        - condition:
+            contains:
+              docker.container.image: ""   # match all containers
+          config:
+            - type: container
+              paths:
+                - /var/lib/docker/containers/${data.docker.container.id}/*.log
+
+processors:
+  - add_docker_metadata: ~
+  - add_host_metadata: ~
+
+# Let Elasticsearch route events through the default ingest pipelines.
+setup.kibana:
+  host: "http://kibana:5601"
+  username: "elastic"
+  password: "${ELASTIC_PASSWORD}"
+
+setup.ilm.enabled: true
+setup.template.settings:
+  index.number_of_replicas: 0
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  username: "elastic"
+  password: "${ELASTIC_PASSWORD}"
+
+logging.level: info

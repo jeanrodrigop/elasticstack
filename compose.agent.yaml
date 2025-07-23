@@ -1,0 +1,142 @@
+# =============================================================================
+# MODULE: Elastic Agent + Fleet Server   (the DEFAULT, recommended shipper)
+#
+#   docker compose -f compose.yaml -f compose.agent.yaml up -d
+#
+# Brings up:
+#   * fleet-server  — Elastic Agent in Fleet Server mode. Self-generates its
+#                     service token from the `elastic` user, so no manual token
+#                     juggling is required.
+#   * elastic-agent — managed Elastic Agent that enrols into the
+#                     "Elastic Agent Observability" policy (System + Docker)
+#                     pre-created in configs/kibana/kibana.yml.
+#
+# Both run over HTTP (insecure) to match the core's no-TLS homelab setup.
+# Ready to grow: add Kubernetes/Nginx/etc. integrations from the Fleet UI.
+# =============================================================================
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-labels: &default-labels
+  com.elastic-stack.project: "elastic-stack"
+  com.elastic-stack.managed-by: "docker-compose"
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # fleet-server — control plane every managed agent talks to.
+  # ---------------------------------------------------------------------------
+  fleet-server:
+    image: docker.elastic.co/elastic-agent/elastic-agent:${STACK_VERSION:-9.4.2}
+    container_name: fleet-server
+    labels:
+      <<: *default-labels
+      com.elastic-stack.component: "fleet-server"
+    restart: unless-stopped
+    networks: [elastic]
+    ports:
+      - "${FLEET_SERVER_PORT:-8220}:8220"
+    user: root
+    environment:
+      - FLEET_SERVER_ENABLE=1
+      - FLEET_SERVER_HOST=0.0.0.0
+      - FLEET_SERVER_PORT=8220
+      # Serve plain HTTP (no TLS) — matches the core's homelab profile.
+      - FLEET_SERVER_INSECURE_HTTP=1
+      # Bootstrap: the agent mints its own service token using these creds.
+      - FLEET_SERVER_ELASTICSEARCH_HOST=http://elasticsearch:9200
+      - FLEET_SERVER_ELASTICSEARCH_USERNAME=elastic
+      - FLEET_SERVER_ELASTICSEARCH_PASSWORD=${ELASTIC_PASSWORD}
+      - FLEET_SERVER_ELASTICSEARCH_INSECURE=1
+      - FLEET_SERVER_POLICY_ID=fleet-server-policy
+      # Drive Fleet setup in Kibana on first boot.
+      - KIBANA_FLEET_SETUP=1
+      - KIBANA_HOST=http://kibana:5601
+      - KIBANA_FLEET_USERNAME=elastic
+      - KIBANA_FLEET_PASSWORD=${ELASTIC_PASSWORD}
+      - FLEET_URL=http://fleet-server:8220
+      - FLEET_INSECURE=1
+      - TZ=${TIMEZONE:-UTC}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      kibana:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "elastic-agent status | grep -q -i healthy || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: "${FLEET_SERVER_CPU_LIMIT:-1}"
+          memory: ${FLEET_SERVER_MEM_LIMIT:-1g}
+        reservations:
+          memory: 256m
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # elastic-agent — data shipper. Self-enrols into the Observability policy and
+  # collects host metrics/logs + Docker. Mounts give it visibility of the host
+  # and the Docker daemon.
+  # ---------------------------------------------------------------------------
+  elastic-agent:
+    image: docker.elastic.co/elastic-agent/elastic-agent:${STACK_VERSION:-9.4.2}
+    container_name: elastic-agent
+    labels:
+      <<: *default-labels
+      com.elastic-stack.component: "elastic-agent"
+    restart: unless-stopped
+    networks: [elastic]
+    user: root
+    # pid: host + the hostfs mounts let the System integration see real host
+    # processes and filesystems instead of the container's own namespace.
+    pid: host
+    environment:
+      - FLEET_ENROLL=1
+      - FLEET_URL=http://fleet-server:8220
+      - FLEET_INSECURE=1
+      - KIBANA_HOST=http://kibana:5601
+      - KIBANA_FLEET_USERNAME=elastic
+      - KIBANA_FLEET_PASSWORD=${ELASTIC_PASSWORD}
+      # Enrol into this pre-created policy (System + Docker integrations).
+      - FLEET_TOKEN_POLICY_NAME=${AGENT_POLICY_NAME:-Elastic Agent Observability}
+      - TZ=${TIMEZONE:-UTC}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc:/hostfs/proc:ro
+      - /sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro
+      - /:/hostfs:ro
+      - agent-data:/usr/share/elastic-agent/state
+    depends_on:
+      fleet-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "elastic-agent status | grep -q -i healthy || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: "${AGENT_CPU_LIMIT:-1}"
+          memory: ${AGENT_MEM_LIMIT:-1g}
+        reservations:
+          memory: 256m
+    logging: *default-logging
+
+volumes:
+  agent-data:
+    name: elastic-stack-agent-data
+
+networks:
+  elastic:
+    name: elastic-stack
+    driver: bridge

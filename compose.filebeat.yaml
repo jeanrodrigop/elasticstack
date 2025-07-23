@@ -1,0 +1,66 @@
+# =============================================================================
+# LEGACY MODULE: Filebeat  (prefer compose.agent.yaml / Elastic Agent)
+#
+#   docker compose -f compose.yaml -f compose.filebeat.yaml up -d
+#
+# Ships container & host logs straight to the core Elasticsearch. Independent
+# of Fleet. Provided as a fallback for environments that still standardise on
+# Beats.
+# =============================================================================
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-labels: &default-labels
+  com.elastic-stack.project: "elastic-stack"
+  com.elastic-stack.managed-by: "docker-compose"
+
+services:
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:${STACK_VERSION:-9.4.2}
+    container_name: filebeat
+    labels:
+      <<: *default-labels
+      com.elastic-stack.component: "filebeat"
+    restart: unless-stopped
+    networks: [elastic]
+    # root + docker.sock are required to read other containers' logs.
+    user: root
+    command: ["--strict.perms=false"]
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - TZ=${TIMEZONE:-UTC}
+    volumes:
+      - ${FILEBEAT_CONFIG:-./configs/filebeat/filebeat.yml}:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log:/hostfs/var/log:ro
+      - filebeat-data:/usr/share/filebeat/data
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "filebeat test output | grep -q -i 'talk to server.*OK' || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 6
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+    logging: *default-logging
+
+volumes:
+  filebeat-data:
+    name: elastic-stack-filebeat-data
+
+networks:
+  elastic:
+    name: elastic-stack
+    driver: bridge

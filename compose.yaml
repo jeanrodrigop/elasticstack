@@ -1,0 +1,184 @@
+# =============================================================================
+# Elastic Stack — CORE (always on)
+#
+#   Elasticsearch + Kibana (Fleet-ready) + a one-shot security bootstrap.
+#   This file is fully functional on its own:
+#
+#       docker compose up -d
+#
+#   Optional components live in compose.<module>.yaml and are layered on top
+#   with additional `-f` flags. See README.md.
+# =============================================================================
+name: elastic-stack
+
+# --- Reusable building blocks ------------------------------------------------
+# YAML anchors are file-scoped, so each compose.*.yaml re-declares the ones it
+# needs. They keep logging, labels and restart behaviour consistent.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-labels: &default-labels
+  com.elastic-stack.project: "elastic-stack"
+  com.elastic-stack.managed-by: "docker-compose"
+
+# -----------------------------------------------------------------------------
+services:
+
+  # ---------------------------------------------------------------------------
+  # setup — one-shot bootstrap. Waits for Elasticsearch to be healthy, then sets
+  # the password for the built-in `kibana_system` user so Kibana can log in with
+  # least privilege instead of the `elastic` superuser. Exits 0 when done.
+  # ---------------------------------------------------------------------------
+  setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION:-9.4.2}
+    container_name: elastic-setup
+    labels:
+      <<: *default-labels
+      com.elastic-stack.component: "setup"
+    restart: "no"
+    networks: [elastic]
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - |
+        echo "[setup] Waiting for Elasticsearch and configuring kibana_system user...";
+        until curl -s -u "elastic:${ELASTIC_PASSWORD}" \
+          -X POST "http://elasticsearch:9200/_security/user/kibana_system/_password" \
+          -H "Content-Type: application/json" \
+          -d "{\"password\":\"${KIBANA_PASSWORD}\"}" | grep -q "^{}"; do
+          echo "[setup] elasticsearch not ready yet, retrying in 5s...";
+          sleep 5;
+        done;
+        echo "[setup] kibana_system password configured. Bootstrap complete.";
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # elasticsearch — single-node cluster with security enabled (HTTP + basic
+  # auth). Data lives in a named volume. TLS is intentionally left off for a
+  # simple homelab; see README.md for how to turn it on.
+  # ---------------------------------------------------------------------------
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION:-9.4.2}
+    container_name: elasticsearch
+    labels:
+      <<: *default-labels
+      com.elastic-stack.component: "elasticsearch"
+    restart: unless-stopped
+    networks: [elastic]
+    ports:
+      - "${ES_PORT:-9200}:9200"
+    environment:
+      - node.name=elasticsearch
+      - cluster.name=${CLUSTER_NAME:-elastic-stack}
+      - discovery.type=single-node
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - bootstrap.memory_lock=true
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - xpack.license.self_generated.type=${LICENSE:-basic}
+      - ES_JAVA_OPTS=-Xms${ES_JAVA_HEAP:-1g} -Xmx${ES_JAVA_HEAP:-1g}
+      - TZ=${TIMEZONE:-UTC}
+    # memlock unlimited is required by bootstrap.memory_lock; nofile is the
+    # mmap/file-descriptor minimum Elasticsearch expects.
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -s -u "elastic:${ELASTIC_PASSWORD}"
+          http://localhost:9200/_cluster/health
+          | grep -qE '"status":"(green|yellow)"'
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "${ES_CPU_LIMIT:-2}"
+          memory: ${ES_MEM_LIMIT:-2g}
+        reservations:
+          memory: 1g
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # kibana — UI + Fleet management plane. Logs in as kibana_system and is
+  # pre-configured (configs/kibana/kibana.yml) with the Fleet policies the
+  # Elastic Agent module enrolls into.
+  # ---------------------------------------------------------------------------
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION:-9.4.2}
+    container_name: kibana
+    labels:
+      <<: *default-labels
+      com.elastic-stack.component: "kibana"
+    restart: unless-stopped
+    networks: [elastic]
+    ports:
+      - "${KIBANA_PORT:-5601}:5601"
+    environment:
+      # These are consumed via ${VAR} substitution inside kibana.yml.
+      - KIBANA_PASSWORD=${KIBANA_PASSWORD}
+      - KIBANA_ENCRYPTION_KEY=${KIBANA_ENCRYPTION_KEY}
+      - KIBANA_PORT=${KIBANA_PORT:-5601}
+      - TZ=${TIMEZONE:-UTC}
+    volumes:
+      - ./configs/kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+      - kibana-data:/usr/share/kibana/data
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -s http://localhost:5601/api/status
+          | grep -q '"level":"available"'
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          cpus: "${KIBANA_CPU_LIMIT:-2}"
+          memory: ${KIBANA_MEM_LIMIT:-1g}
+        reservations:
+          memory: 512m
+    logging: *default-logging
+
+# --- Persistence -------------------------------------------------------------
+# Named volumes (Docker-managed). Survive `down`; removed only with
+# `docker compose down -v`. The ./volumes/ directory is an optional bind-mount
+# alternative documented in README.md.
+volumes:
+  es-data:
+    name: elastic-stack-es-data
+  kibana-data:
+    name: elastic-stack-kibana-data
+
+# --- Network -----------------------------------------------------------------
+# Single dedicated bridge shared by the core and every optional module so all
+# components resolve each other by service name (elasticsearch, kibana, ...).
+networks:
+  elastic:
+    name: elastic-stack
+    driver: bridge

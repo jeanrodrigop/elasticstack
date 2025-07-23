@@ -1,0 +1,10 @@
+# Logstash node settings (bind-mounted read-only).
+http.host: "0.0.0.0"            # expose the monitoring API on :9600
+log.level: info
+pipeline.ordered: auto
+
+# X-Pack monitoring ships Logstash's own metrics to the core Elasticsearch.
+xpack.monitoring.enabled: true
+xpack.monitoring.elasticsearch.hosts: ["http://elasticsearch:9200"]
+xpack.monitoring.elasticsearch.username: "elastic"
+xpack.monitoring.elasticsearch.password: "${ELASTIC_PASSWORD}"
